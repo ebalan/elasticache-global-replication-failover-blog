@@ -1,0 +1,509 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  This stack creates the relevant VPC / Subnet  / EC2 for ElastiCache Blog - Region A
+Parameters:
+  VpcCIDR:
+    AllowedPattern: ^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/(3[0-2]|[1-2][0-9]|[0-9]))$|(^Auto$)
+    Description: Please enter the IP range for this VPC
+    Type: String
+    Default: 10.16.0.0/16
+  PublicSubnet1CIDR:
+    AllowedPattern: ^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/(1[6-9]|2[0-8]))$
+    Description: Please enter the IP range for the public subnet
+    Type: String
+    Default: 10.16.10.0/24
+  PrivateSubnet1CIDR:
+    AllowedPattern: ^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/(1[6-9]|2[0-8]))$
+    Description: Please enter the IP range for the private subnet
+    Type: String
+    Default: 10.16.20.0/24
+  LatestAmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2'
+  Route53HostedZoneDNS:
+    Description: DNS of the Route53 hosted zone
+    Type: String
+    Default: "redis-dr.live"
+  Route53Cname:
+    Description: CName of the primary EC cache
+    Type: String
+    Default: "demo.redis-dr.live"
+  VPCRegionB:
+    Description: ARN of the VPC of the DR site in regionB
+    Type: String    
+  ElastiCacheReplicationId:
+    Description: Id of the ElastiCache id prefix
+    Type: String
+    Default: "ec-dr-region" 
+  GlobalReplicationGroupIdSuffix:
+    Description: Global Replication group suffix
+    Type: String
+    Default: "XXXYY" 
+  GlobalReplicationGroupId:
+    Description: Global Replication group ID
+    Type: String
+  OriginalRegion:
+    Description: Origianl region
+    Type: String
+    Default: "us-east-1" 
+  PeeredRegion:
+    Description: DR region
+    Type: String
+    Default: "us-east-2" 
+  PeeredVpcCIDR:
+    AllowedPattern: ^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/(3[0-2]|[1-2][0-9]|[0-9]))$|(^Auto$)
+    Description: Please enter the IP range for this VPC
+    Type: String
+    Default: 10.18.0.0/16
+  VpcPeeringConnectionID:
+    Description: VPC Peering connection id
+    Type: String
+  ElastiCachePrimaryURL:
+    Description: ElastiCache Primary URL
+    Type: String
+    Default: "primary.region.com" 
+  Route53HostedZoneId:
+    Description: Route53 hosted zone if
+    Type: String    
+  LambdaExecutionRoleARN:
+    Description: Lambda Execution role ARN
+    Type: String
+  PostDrSiteCreation:
+    Description: run this after the DR site is establish
+    Type: String
+    AllowedValues:
+      - true
+      - false
+    Default: false
+    ConstraintDescription: Specify if the DR region is already created
+  RegionCreation:
+    Description: run this after the DR site is establish
+    Type: String
+    AllowedValues:
+      - "RegionA"
+      - "RegionB"
+    Default: RegionA
+  ECCreated:
+    Description: ElastiCache created
+    Type: String
+    AllowedValues:
+      - true
+      - false
+    Default: false
+Conditions:
+  PostRegionPeering: !Equals
+    - !Ref PostDrSiteCreation
+    - true
+  OriginalRegionCondition: !Equals
+    - !Ref RegionCreation
+    - "RegionA"
+  DRRegionCondition: !Equals
+    - !Ref RegionCreation
+    - "RegionB"
+  GlobalReplicationCreation:
+    !And [!Equals [true, !Ref ECCreated], Condition: OriginalRegionCondition]
+  VPCPeeringCreationCond: 
+    !And [Condition: PostRegionPeering, Condition: OriginalRegionCondition]
+  
+Outputs:
+  VPCId:
+    Description: VPC Id
+    Value: !Ref VPC
+  VPCPeeringID:
+    Description: VPC Peerting ID
+    Condition: VPCPeeringCreationCond
+    Value: !Ref PeeringVPC
+  LambdaExecutionRole:
+    Description: Lambda Execution Role
+    Condition: OriginalRegionCondition
+    Value: 
+      Fn::GetAtt:
+        - "ElastiCacheRoute53Role"
+        - "Arn"
+  Route53HostedZone:
+    Description: Route53 Hosted Zone
+    Condition: OriginalRegionCondition
+    Value:  !Ref Route53HostedZone
+  ElastiCachePrimaryURL:
+    Description: ElastiCache primary URL
+    Value:  
+      Fn::GetAtt:
+        - "ElastiCacheCluster"
+        - "PrimaryEndPoint.Address"
+  GlobalElastiCacheGroupId:
+    Description: ElastiCache primary URL
+    Condition: GlobalReplicationCreation
+    Value: 
+      Fn::GetAtt:
+        - "ElastiCacheGlobalReplication"
+        - "GlobalReplicationGroupId"
+      
+  
+Resources:
+### NETWORK RESOURCES
+  VPC:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsSupport: 'true'
+      EnableDnsHostnames: 'true'
+      InstanceTenancy: "default"
+  PublicSubnet1:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PublicSubnet1CIDR
+      MapPublicIpOnLaunch: true
+  PrivateSubnet1:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateSubnet1CIDR
+      MapPublicIpOnLaunch: false
+  Ec2HelperInstance:
+    Type: "AWS::EC2::Instance"
+    Properties:
+      ImageId: !Ref LatestAmiId
+      SecurityGroupIds:
+        - !Ref Ec2HelperSecurityGroup
+      SubnetId:
+        Ref: "PublicSubnet1"
+      InstanceType: "t2.small"
+  Ec2HelperSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "EC2 helper security group"
+      GroupName: "EC2 helper SG"
+      VpcId:
+        Ref: VPC
+      SecurityGroupIngress:
+      - CidrIp: "0.0.0.0/0"
+        IpProtocol: "tcp"
+        FromPort: 22
+        ToPort: 22
+      SecurityGroupEgress:
+      - CidrIp: "0.0.0.0/0"
+        IpProtocol: "-1"
+        FromPort: -1
+        ToPort: -1
+  ElastiCacheCluster:
+    Type: AWS::ElastiCache::ReplicationGroup
+    Properties:
+      ReplicationGroupId: !If [OriginalRegionCondition, !Sub '${ElastiCacheReplicationId}-a', !Sub '${ElastiCacheReplicationId}-b']          
+      ReplicationGroupDescription: "ElastiCache replication group"
+      CacheNodeType: !If [OriginalRegionCondition, "cache.r7g.large", !Ref "AWS::NoValue"] 
+      Engine: !If [OriginalRegionCondition, "valkey", !Ref "AWS::NoValue"] 
+      NumCacheClusters: 2
+      CacheSubnetGroupName: !Ref ECSubnetGroup
+      NotificationTopicArn: !Ref SNSTopic
+      GlobalReplicationGroupId: !If [DRRegionCondition, !Ref GlobalReplicationGroupId, !Ref "AWS::NoValue"]
+      TransitEncryptionEnabled: !If [OriginalRegionCondition, true, !Ref "AWS::NoValue"]
+      AtRestEncryptionEnabled: !If [OriginalRegionCondition, true, !Ref "AWS::NoValue"]
+      SecurityGroupIds:
+      - !Ref ElasticacheSecurityGroup
+  ECSubnetGroup:
+    Type: 'AWS::ElastiCache::SubnetGroup'
+    Properties:
+      Description: Cache Subnet Group
+      SubnetIds:
+        - !Ref PrivateSubnet1
+  ElasticacheSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "ElastiCache Cluster security group"
+      GroupName: "ElastiCache Cluster SG"
+      VpcId:
+        Ref: VPC
+      SecurityGroupIngress:
+      - SourceSecurityGroupId: !Ref Ec2HelperSecurityGroup
+        IpProtocol: "tcp"
+        FromPort: 6379
+        ToPort: 6379
+      - CidrIp: !Ref PeeredVpcCIDR
+        IpProtocol: "tcp"
+        FromPort: 6379
+        ToPort: 6379
+      SecurityGroupEgress:
+      - CidrIp: "0.0.0.0/0"
+        IpProtocol: "-1"
+        FromPort: -1
+        ToPort: -1
+  ElastiCacheGlobalReplication:
+    Type: AWS::ElastiCache::GlobalReplicationGroup
+    Condition: GlobalReplicationCreation
+    Properties:
+      AutomaticFailoverEnabled: 'True'
+      GlobalReplicationGroupIdSuffix: !Ref GlobalReplicationGroupIdSuffix
+      Members:
+        Fn::If:
+          - VPCPeeringCreationCond
+          - - ReplicationGroupId: !Sub '${ElastiCacheReplicationId}-a'
+              ReplicationGroupRegion: !Ref OriginalRegion
+              Role: PRIMARY
+            - ReplicationGroupId: !Sub '${ElastiCacheReplicationId}-b'
+              ReplicationGroupRegion: !Ref PeeredRegion
+              Role: SECONDARY
+          - - ReplicationGroupId: !Sub '${ElastiCacheReplicationId}-a'
+              ReplicationGroupRegion: !Ref OriginalRegion
+              Role: PRIMARY  
+        
+  InternetGateway:
+    Type: 'AWS::EC2::InternetGateway'
+  InternetGatewayAttachment:
+    Type: 'AWS::EC2::VPCGatewayAttachment'
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+  PublicRouteTable:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref VPC
+  PrivateRouteTable:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref VPC
+  DefaultPublicRoute:
+    Type: 'AWS::EC2::Route'
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  PublicSubnet1RouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+  PrivateSubnet1RouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref  PrivateSubnet1
+  PeeringVPC:
+    Type: AWS::EC2::VPCPeeringConnection
+    Properties: 
+      PeerRegion: !Ref PeeredRegion
+      PeerVpcId: !Ref VPCRegionB
+      VpcId: !Ref VPC 
+    Condition: VPCPeeringCreationCond
+  VPCPublicPeeringRoute:
+    Type: 'AWS::EC2::Route'
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: !Ref PeeredVpcCIDR
+      VpcPeeringConnectionId: 
+        Fn::If:
+              - VPCPeeringCreationCond
+              - !Ref PeeringVPC
+              - !Ref VpcPeeringConnectionID
+    Condition: PostRegionPeering
+  VPCPrivatePeeringRoute:
+    Type: 'AWS::EC2::Route'
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: !Ref PeeredVpcCIDR
+      VpcPeeringConnectionId: 
+        Fn::If:
+              - VPCPeeringCreationCond
+              - !Ref PeeringVPC
+              - !Ref VpcPeeringConnectionID
+    Condition: PostRegionPeering
+  SNSTopic:
+    Type: "AWS::SNS::Topic"
+    Properties:
+      TracingConfig: "PassThrough"
+      DisplayName: "ec-notifications"
+      FifoTopic: false
+      Subscription:
+      - Endpoint:
+          Fn::GetAtt:
+          - "LambdaFunctionECDNSFailover"
+          - "Arn"
+        Protocol: "lambda"
+  LambdaPermission00functionecclusterdnsfailover00OzOYl:
+    Type: "AWS::Lambda::Permission"
+    Properties:
+      FunctionName:
+        Fn::GetAtt:
+        - "LambdaFunctionECDNSFailover"
+        - "Arn"
+      Action: "lambda:InvokeFunction"
+      SourceArn:
+        Ref: "SNSTopic"
+      Principal: "sns.amazonaws.com"
+  LambdaFunctionECDNSFailover:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: "ec-cluster-dns-failover"
+      Runtime: python3.12
+      Timeout: 10
+      Environment:
+        Variables:
+          cname: !Ref Route53Cname
+          zone_id: 
+            Fn::If:
+              - OriginalRegionCondition
+              - !Ref Route53HostedZone
+              - !Ref Route53HostedZoneId
+          endpoint: !Ref ElastiCachePrimaryURL
+      Role:
+        Fn::If:
+          - OriginalRegionCondition
+          - Fn::GetAtt:
+            - "ElastiCacheRoute53Role"
+            - "Arn"
+          - !Ref LambdaExecutionRoleARN
+      Handler: "index.lambda_handler"
+      Code:
+        ZipFile: |
+          from __future__ import print_function
+
+          import boto3
+          import re
+          import os
+          import json
+
+          CNAME = os.environ['cname']
+          ENDPOINT= os.environ['endpoint']
+          ZONE_ID = os.environ['zone_id']
+          
+          def aws_session(role_arn=None, session_name='my_session'):
+              """
+              If role_arn is given assumes a role and returns boto3 session
+              otherwise return a regular session with the current IAM userFailoverComplete/role
+              """
+
+              if role_arn:
+                  client = boto3.client('sts')
+                  response = client.assume_role(
+                      RoleArn=role_arn, RoleSessionName=session_name)
+                  session = boto3.Session(
+                      aws_access_key_id=response['Credentials']['AccessKeyId'],
+                      aws_secret_access_key=response['Credentials']['SecretAccessKey'],
+                      aws_session_token=response['Credentials']['SessionToken'])
+                  return session
+              else:
+                  return boto3.Session()
+          def update_cname(endpoint, cname, zone, session):
+              """
+              update CNAME
+               """
+
+              route53 = session.client('route53')
+              dzone = route53.get_hosted_zone(Id=zone)
+              print("DEBUG - retrieve hosted zone  {}".format(zone))
+              dzonedomain = dzone["HostedZone"]["Name"]
+
+              dns_changes = {
+                  'Changes': [
+                      {
+                          'Action': 'UPSERT',
+                          'ResourceRecordSet': {
+                              'Name': cname,
+                              'Type': 'CNAME',
+                              'TTL': 10,
+                              'ResourceRecords': [
+                                  {
+                                    'Value': endpoint,
+                                  }
+                              ],
+                          }
+                      }
+                  ]
+              }
+              
+              print("DEBUG - Updating Route53 to create CNAME {} for {}".format(cname, endpoint))
+              route53.change_resource_record_sets(HostedZoneId=zone, ChangeBatch=dns_changes)          
+          def lambda_handler(event, context):
+              """
+              Main lambda function
+              Parse and check the event validity
+              """
+              
+              message = event['Records'][0]['Sns']['Message']
+              msg_event = message.split(':')[1].strip(" \"")
+              events = ['ReplicationGroupPromotedAsPrimary']
+              print("DEBUG - start function with message {} and meesage event {}".format(message, msg_event))
+
+              if msg_event not in events:
+                  print('Event {} is not valid for the Global Datastore failover function'.format(msg_event))
+                  return
+              
+              print('Event {} is valid, processing with the DNS update...'.format(msg_event))
+
+              session = aws_session()
+              dnsupdate = update_cname(ENDPOINT, CNAME, ZONE_ID, session)
+      Description: ElastiCache primary DNS failover handling
+      TracingConfig:
+        Mode: PassThrough
+  Route53HostedZone:
+    Type: "AWS::Route53::HostedZone"
+    Condition: OriginalRegionCondition
+    Properties:
+      VPCs:
+        Fn::If:
+          - VPCPeeringCreationCond
+          - - VPCRegion: !Ref OriginalRegion
+              VPCId: !Ref VPC
+            - VPCRegion: !Ref PeeredRegion
+              VPCId: !Ref VPCRegionB
+          - - VPCRegion: !Ref OriginalRegion
+              VPCId: !Ref VPC
+      HostedZoneConfig:
+        Comment: ""
+      Name: !Ref Route53HostedZoneDNS
+  Route53RecordSet:
+    Type: AWS::Route53::RecordSet
+    Condition: GlobalReplicationCreation
+    Properties:
+      Type: CNAME
+      TTL: 10
+      HostedZoneId: !Ref Route53HostedZone
+      Name: !Ref Route53Cname
+      ResourceRecords:
+        - Fn::GetAtt:
+            - "ElastiCacheCluster"
+            - "PrimaryEndPoint.Address"
+  ElastiCacheRoute53ManagedPolicy:
+    Type: "AWS::IAM::ManagedPolicy"
+    Condition: OriginalRegionCondition
+    Properties:
+      ManagedPolicyName: "ElastiCache_Route53_DR_test"
+      Description: !Ref Route53HostedZone
+      Groups: []
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Resource:  !Sub 'arn:aws:route53:::hostedzone/${Route53HostedZone}'
+          Action:
+          - "route53:GetHostedZone"
+          - "route53:ChangeResourceRecordSets"
+          Effect: "Allow"
+      Users: []
+  
+  ElastiCacheRoute53Role:
+    Type: "AWS::IAM::Role"
+    Condition: OriginalRegionCondition
+    Properties:
+      Path: "/"
+      ManagedPolicyArns:
+      - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+      - !Ref ElastiCacheRoute53ManagedPolicy 
+      - "arn:aws:iam::aws:policy/AmazonElastiCacheReadOnlyAccess"
+      MaxSessionDuration: 3600
+      RoleName: "ElastiCache_Route53Role_DR_test"
+      Description: "Allows Lambda functions to call AWS services on your behalf."
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Action: "sts:AssumeRole"
+          Effect: "Allow"
+          Principal:
+            Service: "lambda.amazonaws.com"
+
+
+      
+
+
+
+      
