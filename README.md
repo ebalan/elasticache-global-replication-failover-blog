@@ -118,19 +118,22 @@ Run an update on the CF template in the DR region  with the following parameters
 
 
 
-Stage6 - Update DNS setting of the VPC peering connection. 
-
-Perform the operation on both primary and DR region. ( this operation isn’t supported in CloudFormation and need to be done manually)
+Stage6 - Update DNS setting of the VPC peering connection (  this operation isn’t supported in CloudFormation and need to be done in the AWS console)
+1. In the AWS console go to VPC -> Peering connections
+2. choose the peering connection created
+3. Go to the DNS tab and click on "Edit DNS settings"
+4. Enable the "Requester DNS resolution" checkbox.
+5. Perform the operation on both primary and DR region. 
 
 Stage7 - Test the new resources by performing the following steps:
 
 1. connect to the EC2 in the public subnet of the primary region ( use ec2-instance-connect)
 2. Install valkey-cli using the instruction in ElastiCache documentation
     1. sudo yum install gcc jemalloc-devel openssl-devel tcl tcl-devel clang wget
-        wget https://github.com/valkey-io/valkey/archive/refs/tags/7.2.6.tar.gz
-        tar xvzf 7.2.6.tar.gz
-        cd valkey-7.2.6
-        make valkey-cli CC=clang BUILD_TLS=yes
+     1. wget https://github.com/valkey-io/valkey/archive/refs/tags/7.2.6.tar.gz
+     2. tar xvzf 7.2.6.tar.gz
+     3. cd valkey-7.2.6
+     4. make valkey-cli CC=clang BUILD_TLS=yes
 3. connect to the redis db using the following command
     1. ./src/valkey-cli -h <hostname> -p 6379 --tls
     2. for the hostname you can use the endpoints provided in the ElastiCache console or use the route53 cname the points to the current primary. 
