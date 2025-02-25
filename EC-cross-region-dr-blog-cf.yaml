@@ -23,11 +23,11 @@ Parameters:
   Route53HostedZoneDNS:
     Description: DNS of the Route53 hosted zone
     Type: String
-    Default: "redis-dr.live"
+    Default: "valkey-dr.live"
   Route53Cname:
     Description: CName of the primary EC cache
     Type: String
-    Default: "demo.redis-dr.live"
+    Default: "demo.valkey-dr.live"
   VPCRegionB:
     Description: ARN of the VPC of the DR site in regionB
     Type: String    
@@ -67,6 +67,9 @@ Parameters:
     Type: String    
   LambdaExecutionRoleARN:
     Description: Lambda Execution role ARN
+    Type: String
+  EC2InstanceConnectPrefixID:
+    Description: EC2 Connect IP prefix list id
     Type: String
   PostDrSiteCreation:
     Description: run this after the DR site is establish
@@ -177,7 +180,7 @@ Resources:
       VpcId:
         Ref: VPC
       SecurityGroupIngress:
-      - CidrIp: "0.0.0.0/0"
+      - SourcePrefixListId: !Ref EC2InstanceConnectPrefixID
         IpProtocol: "tcp"
         FromPort: 22
         ToPort: 22
