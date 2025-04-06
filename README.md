@@ -1,142 +1,202 @@
-# elasticache-global-replication-failover-blog
-code sample for ElastiCache global replication failover blog
-
-Cross region ElastiCache clusters CF instructions
-
-General:
-
-1. You will create AWS resources in two AWS regions. One will be in the primary region and one the DR region. 
-2. To create the AWS resources you would run the supplied cloudformation template in each of the regions. 
-3. You would need to supply two separate VPC CIDR for each of the regions ( no overlapping between them as we’ll peer between them). For each of those VPC you’ll supply 2 VPC CIDR for 2 subnets: a public subnet where the ec2 which we’ll connect to and a private subnet where the ElastiCache cluster will be provisioned.
-
-Stage1 -  Create the ElastiCache cluster in the primary region
-
- In this step the CloudFormation stack will create the following resources:
-
-1. VPC where the EC cluster will be provisioned
-2. Private Subnet which contains the ElastiCache cluster.
-3. Public subnet that will contain an EC2 which will use to connect to the EC clustser
-4. ElastiCache cluster contains a primary node and a read replica. 
-5. ElastiCache global  cluster connected to the ElastiCache cluster
-6. SNS topic that will handle the EC cluster notification including primary failover notifications
-7. The lambda function triggered by the SNS topic to handle  the DNS switch to the new EC primary cluster
-8. Route53 hosted zone and record set pointing to the ElastiCache primary end-point
-
-
-Create a cloudformation stack in the primary region using the CF template. The CF has the following parameters:
-
-1. VpcCIDR - the VPC CIDR in this region. the template use as default 10.16.0.0/16 but can be changed.
-2. PublicSubnet1CIDR - The public subnet CIDR which should be a sub-CIDR of the VPC CIDR. The template use as default as 10.16.10.0/24 but can be changed. 
-3. PrivateSubnet1CIDR - The public subnet CIDR which should be a sub-CIDR of the VPC CIDR. The template use as default as 10.16.20.0/24 but can be changed. 
-4. ECCreated - leave false at this stage
-5. ElastiCacheReplicationId - Prefix of the id of the ElastiCache cluster. The id of the EC global cluster will end with this suffix. You can leave as default. 
-6. ElastiCachePrimaryURL - endpoint for points to the primary cluster. leave as default
-7. GlobalReplicationGroupIdSuffix - leave as default
-8. LambdaExecutionRoleARN - leave empty at this stage
-9. LatestAmiId - leave as default
-10. OriginalRegion - the primary region . Default is us-east-1
-11. PeeredRegion - the DR region. Default is usi-east-2.
-12. PeeredVpcCIDR - Update with VPC CIDR of the DR region. Should be the same as VpcCIDR in the DR region  
-13. PostDrSiteCreation - leave false at this stage
-14. RegionCreation - RegionA
-15. Route53Cname - CName of the primary EC cache. Default - demo.redis-dr.live
-16. Route53HostedZoneId - leave empty at this stage
-17. VPCRegionB - leave empty at this stage
-18. VpcPeeringConnectionID -  leave empty at this stage
-
-Outputs:
-
-1. ElastiCachePrimaryURL
-2. LambdaExecutionRole
-3. Route53HostedZone
-4. VPCId
-
-Stage2 - Create the ElastiCache Global database
-
-
-Run an update of the CF template in the primary region with the following parameter changes:
-parameters:
-
-1. ECCreated - true
+**Introduction**
 
 
 
-Stage3- Create the ElastiCache cluster in the DR region. 
+The post provides a solution for multi-Region caching using Amazon ElastiCache( https://aws.amazon.com/elasticache/) . One of the challenges of this solution is identifying the active cluster in the multi-Region architecture. The solution uses multiple AWS services that can automate a process of discovering the active cluster and perform DNS changes accordingly. The solution is related to the blog post Enable cross region write operations with ElastiCache Global Datastore[KT1] and is part of the following GitHub repository (https://github.com/ebalan/elasticache-global-replication-failover-blog ). The repository contains an AWS CloudFormation ( http://aws.amazon.com/cloudformation)  template that can be deployed on your AWS account, which provisions the solution resources.
 
-In this step the CloudFormation stack will create the following resources:
+**Solution deployment overview**
 
-1. VPC where the EC will be provisioned
-2. Private Subnet which contains the ElastiCache cluster.
-3. Public subnet that will contain an EC2 which will use to connect to the EC clustser
-4. ElastiCache cluster container a primary node and a read replica. 
-5. Connect the ElastiCache global  cluster to the ElastiCache cluster
-6. SNS topic that will handle the EC cluster notification including primary failover notifications
-7. The lambda function triggered by the SNS topic to handle  the DNS switch to the new EC primary cluster
+This solution deployment is a multi-step process. The provided CloudFormation template uses several parameters to control what resources are deployed in each stage. The deployment process comprises  the following steps:
 
-Global resource such as IAM roles and route53 resource aren’t been created at this stage. Their ids are given to the stack as parameters. 
+1. Deploy the CloudFormation template in the primary AWS Region ( https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-console-create-stack.html) . It creates the following resources
+    1. A new virtual private cloud  (VPC).
+    2. A private subnet to host the Amazon ElastiCache cluster.
+    3. A public subnet to host an Amazon Elastic Compute Cloud (Amazon EC2) instance used to connect to the ElastiCache cluster.
+    4. An ElastiCache for Valkey cluster with a primary node and a read replica (cluster mode disabled).
+    5. An Amazon Simple Notification Service( Amazon SNS) topic to handle ElastiCache cluster notifications including primary failover notifications.
+    6. An AWS Lambda function that handles DNS updates when a failover occurs.
+    7. An Amazon Route 53 hosted zone and record set pointing to the ElastiCache primary endpoint.
+2. Run the CloudFormation template again in the primary Region with updated parameters. This second deployment will create the ElastiCache global datastore
+3. Deploy the template on the secondary (disaster recovery) Region. It creates the following resources:
+    1. A VPC where the ElastiCache cluster will be provisioned.
+    2. A private subnet that contains the ElastiCache cluster.
+    3. A public subnet that will contain an EC2 instance that we will use to connect to the ElastiCache cluster
+    4. An ElastiCache cluster containing a primary node and a read replica.
+    5. A connection from the ElastiCache global cluster to the ElastiCache cluster.
+    6. A SNS topic that will handle the ElastiCache cluster notification including primary failover notifications..
+    7. A Lambda function that is triggered by the SNS topic to handle the DNS switch to the new ElastiCache primary cluster.
+    8. Global resources such as AWS Identity and Access Management (IAM) roles and Route 53 resources aren’t created at this stage. Their IDs are given to the stack as parameters.
+4. Deploy the template in the primary Region again to configure a VPC peering connection between the two Regions.
+5. Deploy the template in the secondary Region again to attach the VPC peering created in the previous step.
+6. Update the DNS settings of the VPC peering connection. (must be done using the AWS Console).
 
-Create a cloudformation stack in the DR region using the CF template. The CF has the following parameters:
+**Prerequisites**
 
-1. VpcCIDR - the VPC CIDR in this region. The CIDR shouldn’t overlap from the CIDR VPC of the primary region 
-2. PublicSubnet1CIDR - The public subnet CIDR which should be a sub-CIDR of the VPC CIDR. 
-3. PrivateSubnet1CIDR - The public subnet CIDR which should be a sub-CIDR of the VPC CIDR.
-4. ECCreated - leave false at this stage
-5. ElastiCacheReplicationId - Prefix of the id of the ElastiCache cluster. You can leave as default. 
-6. ElastiCachePrimaryURL - endpoint for points to the primary cluster. leave as default
-7. GlobalReplicationGroupIdSuffix - leave as default
-8. LambdaExecutionRoleARN -Copy the value from the LambdaExecutionRole output of the primary region CF stack. 
-9. LatestAmiId - leave as default
-10. OriginalRegion - the primary region . Default is us-east-1
-11. PeeredRegion - the DR region. Default is usi-east-2.
-12. PeeredVpcCIDR - Update with VPC CIDR of the primary region. Should be the same as VpcCIDR in the primary region  .
-13. Update with VPC CIDR of the DR region. default as 10.18.20.0/24 but can be changed. 
-14. PostDrSiteCreation - leave false at this stage
-15. RegionCreation - RegionB
-16. Route53Cname - CName of the primary EC cache. Default - demo.redis-dr.live
-17. Route53HostedZoneId - Copy the value from the Route53HostedZone output of the primary region CF stack. 
-18. VPCRegionB - leave empty at this stage
-19. VpcPeeringConnectionID -  leave empty at this stage
-20. GlobalReplicationGroupId - Copy the value from the GlobalElastiCacheGroupId output of the primary region CF stack. 
+In order to deploy the CloudFormation template you must meet the following requirements:
 
-Stage4 - Create a VPC peering between both regions
+* Have an AWS account and permissions to deploy the following resources to multiple AWS Regions
+    * EC2 instance
+    *  VPC
+    * ElastiCache cluster
+    * Lambda function
+    * SNS topic
+    * Route 53 resources 
+* Download the CloudFormation template from the GitHub repo. ( https://github.com/ebalan/elasticache-global-replication-failover-blog/blob/main/EC-cross-region-dr-blog-cf.yaml )
+* You need to supply two separate VPC CIDRs for each of the Regions (no overlapping between them because we will peer between them). For each VPC, you supply a VPC CIDR for two subnets: a public subnet, where we connect to the EC2 instance, and a private subnet, where the ElastiCache cluster will be provisioned.
+* The CloudFormation template provides default values for the following:[KT1] 
+    * Primary Region: us-east-1
+    * VPC in primary Region: 10.16.0.0/16
+    * Public Subnet in primary Region: 10.16.10.0/24
+    * Private Subnet in primary Region: 10.16.20.0/24
+    * Secondary (disaster recovery) Region: us-east-2
+    * VPC in secondary Region: 10.18.0.0/16
+    * Public Subnet in secondary Region: 10.18.10.0/24
+    * Private Subnet in secondary Region: 10.18.20.0/24
+    * Route 53 CName: demo.valkey-dr.live
 
-Run the CF update in the primary region with the following parameters:
+**Deploy initial resources in the primary Region**
 
-1. ElastiCachePrimaryURL - Copy the value from the ElastiCachePrimaryURL output of the primary region CF stack. 
-2. PostDrSiteCreation - update the value to true
-3. VPCRegionB - Copy the value from the VPCId output of the DR region CF stack. 
-
-Stage5 - Update the DR region with VPC peering connection
-
-
-Run an update on the CF template in the DR region  with the following parameters:
-
-1. ECCreated - change to true
-2. ElastiCachePrimaryURL - Copy the value from the ElastiCachePrimaryURL output of the DR region CF stack. 
-3. PostDrSiteCreation - change to true
-4. VpcPeeringConnectionID - Copy the value from the VPCPeeringID output of the primary region CF stack. 
+The first step is to deploy the CloudFormation template in the primary Region. For instructions, see Create a stack from the CloudFormation console ( https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-console-create-stack.html ). The stack uses the following parameters:
 
 
 
-Stage6 - Update DNS setting of the VPC peering connection (  this operation isn’t supported in CloudFormation and need to be done in the AWS console)
-1. In the AWS console go to VPC -> Peering connections
-2. choose the peering connection created
-3. Go to the DNS tab and click on "Edit DNS settings"
-4. Enable the "Requester DNS resolution" checkbox.
-5. Perform the operation on both primary and DR region. 
+1. EC2InstanceConnectPrefixID – The EC2 Instance Connect prefix ID ( https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-connect-tutorial.html#eic-tut1-task2 ) . You can obtain the prefix ID by opening the AWS console in the primary Region and choosing VPC screen and Managed prefix lists. Search for the prefix list name ec2-instance-connect. You should get two records. Choose the one for IPv4 and copy the prefix list ID. (In the us-east-1  Region, for example, it’s pl-03915406641cb1f53).
+2. ECCreated - Leave as false at this stage.
+3. ElastiCachePrimaryURL - The endpoint that points to the primary cluster. Leave as default.
+4. ElastiCacheReplicationId - The prefix of the ID of the ElastiCache cluster. The ID of the ElastiCache global cluster will end with this suffix. You can leave it as default. 
+5. GlobalReplicationGroupId - The value of the ElastiCache global datastore. Leave empty at this stage. 
+6. GlobalReplicationGroupIdSuffix - Leave as default.
+7. LambdaExecutionRoleARN - Leave empty at this stage.
+8. LatestAmiId - Leave as default.
+9. OriginalRegion - The primary Region . Default is us-east-1
+10. PeeredRegion - The secondary Region. Default is us-east-2.
+11. PeeredVpcCIDR - Update with the VPC CIDR of the secondary Region. It should be the same as VpcCIDR in the secondary Region. 
+12. PostDrSiteCreation - Leave as false at this stage.
+13. PrivateSubnet1CIDR - The public subnet CIDR, which should be a sub-CIDR of the VPC CIDR. The template uses as default 10.16.20.0/24, but this can be changed.  
+14. PublicSubnet1CIDR - The public subnet CIDR, which should be a sub-CIDR of the VPC CIDR. The template uses as default 10.16.10.0/24, but this can be changed. 
+15. RegionCreation - RegionA.
+16. Route53Cname - The CNAME of the primary ElastiCache cache. The default is demo.valkey-dr.live.
+17. Route53HostedZoneDNS - The DNS of the Route 53 hosted zone. The default is valkey-dr.live.
+18. Route53HostedZoneId - Leave empty at this stage.
+19. VPCRegionB - Leave empty at this stage.
+20. VpcCIDR - The VPC CIDR in this Region. The template uses as default 10.16.0.0/16, but this can be changed.
+21. VpcPeeringConnectionID - Leave empty at this stage.
 
-Stage7 - Test the new resources by performing the following steps:
+Collect the values for the following CloudFormation stack outputs to use in later steps:
+ 
 
-1. connect to the EC2 in the public subnet of the primary region ( use ec2-instance-connect)
-2. Install valkey-cli using the instruction in ElastiCache documentation
+* ElastiCachePrimaryURL
+* LambdaExecutionRole
+* Route53HostedZone
+* VPCId
+
+**  Create the ElastiCache global datastore in the primary Region**
+
+Run an update of the CloudFormation template ( https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/using-cfn-updating-stacks-get-template.html)  in the primary Region, and change the ECCreated value to true.
+
+**Deploy initial resources in the secondary Region**
+
+You use the same CloudFormation template to create a stack in the secondary Region. The stack has the following parameters:
+
+
+1. EC2InstanceConnectPrefixID - The EC2 Instance Connect prefix ID. You can obtain the prefix ID by opening the AWS console in the primary Region and choosing VPC screen and Managed prefix lists. Search for the prefix list name ec2-instance-connect. You should get two records. Choose the one for IPv4 and copy the prefix list ID. (In the us-east-1  Region, for example, it’s pl-03915406641cb1f53).
+2. ECCreated - Leave as false at this stage.
+3. ElastiCachePrimaryURL - The endpoint that points to the primary cluster. Leave as default.
+4. ElastiCacheReplicationId - The prefix of the ID of the ElastiCache cluster. You can leave as default. 
+5. GlobalReplicationGroupId - Copy the value from the GlobalElastiCacheGroupId output of the primary Region CloudFormation stack.
+6. GlobalReplicationGroupIdSuffix -Leave as default.
+7. LambdaExecutionRoleARN - Copy the value from the LambdaExecutionRole output of the primary Region CloudFormation stack. 
+8. LatestAmiId - Leave as default.
+9. OriginalRegion - The primary Region. The default is us-east-1.
+10. PeeredRegion - The secondary Region. The default is us-east-2 .
+11. PeeredVpcCIDR - Update with the VPC CIDR of the primary Region. It should be the same as VpcCIDR in the primary Region.
+12. PostDrSiteCreation - Leave as false at this stage.
+13. PrivateSubnet1CIDR - The public subnet CIDR, which should be a sub-CIDR of the VPC CIDR.
+14. PublicSubnet1CIDR - The public subnet CIDR, which should be a sub-CIDR of the VPC CIDR. 
+15. RegionCreation - RegionB.
+16. Route53Cname - The CNAME of the primary ElastiCache cache. The default is demo.valkey-dr.live.
+17. Route53HostedZoneDNS - The DNS of the Route 53 hosted zone. The default is valkey-dr.live.
+18. Route53HostedZoneId - Copy the value from the Route53HostedZone output of the primary Region CloudFormation stack. 
+19. VPCRegionB - Leave empty at this stage.
+20. VpcCIDR - The VPC CIDR in this Region. The CIDR shouldn’t overlap from the CIDR VPC of the primary Region. 
+21. VpcPeeringConnectionID - Leave empty at this stage.
+
+    **Configure a VPC peering connection between the two Regions**
+
+Before you proceed to this step, make sure that the global datastore is provisioned and the ElastiCache clusters in the primary and secondary Regions are linked to it.
+
+Run an update of the CloudFormation template in the primary Region with the following updated parameters:
+
+1. ElastiCachePrimaryURL - Enter the value from the ElastiCachePrimaryURL output of the primary Region CloudFormation stack.
+2. PostDrSiteCreation - Update the value to true.
+3. VPCRegionB - Enter the value from the VPCId output of the secondary Region CloudFormation stack.
+
+**Attach the VPC peering connection in the secondary Region**
+
+Run an update of the CloudFormation template in the secondary Region with the following parameters:
+
+
+1. ECCreated - Change to true.
+2. ElastiCachePrimaryURL - Enter the value from the ElastiCachePrimaryURL output of the secondary Region CloudFormation stack.
+3. PostDrSiteCreation - Change to true.
+4. VpcPeeringConnectionID - Enter the value from the VPCPeeringID output of the primary Region CloudFormation stack.
+
+**Update the DNS settings of the VPC peering connection**
+
+Lastly, update the DNS setting of the VPC peering connection. This operation isn’t supported in AWS CloudFormation and need to be done on the Amazon VPC console. Complete the following steps:
+
+1. On the Amazon VPC console, choose Peering connections in the navigation pane.
+2. Choose the peering connection you created.
+3. On the DNS tab, choose Edit DNS settings.
+4. Select Requester DNS resolution.
+5. Perform this operation in both the primary and secondary Region.
+
+   **Test the solution**
+
+Test the solution by performing the following steps:
+
+1. Connect to the EC2 instance in the public subnet of the primary Region (use ec2-instance-connectwith user name ec2-user)
+2. Install valkey-cli (for instructions, see Connecting to ElastiCache (Valkey) or Amazon ElastiCache for Redis OSS with in-transit encryption using valkey-cli) ( https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/connect-tls.html ) : 
     1. sudo yum install gcc jemalloc-devel openssl-devel tcl tcl-devel clang wget
-     1. wget https://github.com/valkey-io/valkey/archive/refs/tags/7.2.6.tar.gz
-     2. tar xvzf 7.2.6.tar.gz
-     3. cd valkey-7.2.6
-     4. make valkey-cli CC=clang BUILD_TLS=yes
-3. connect to the redis db using the following command
-    1. ./src/valkey-cli -h <hostname> -p 6379 --tls
-    2. for the hostname you can use the endpoints provided in the ElastiCache console or use the route53 cname the points to the current primary. 
-4. Use the ElastiCache console and promote to primary the EC cluster in the DR region. 
-5. After the promote to primary operation completes verify you can connect to the new primary EC cluster using the Route53 DNS endpoint 
+    2. wget https://github.com/valkey-io/valkey/archive/refs/tags/7.2.6.tar.gz
+    3. tar xvzf 7.2.6.tar.gz
+    4. cd valkey-7.2.6
+    5. make valkey-cli CC=clang BUILD_TLS=yes
+3. Connect to the Redis database using the following command:
+    1. ./src/valkey-cli -h -p 6379 —tls
+    2. For the hostname, you can use the endpoints provided on the ElastiCache console or use the Route 53 CNAME.
+4. On the ElastiCache console, promote to primary the ElastiCache cluster in the secondary Region.
+5. After the promote to primary operation is complete, verify you can connect to the new primary ElastiCache cluster using the Route 53 DNS endpoint and perform write and read operations on the cluster (for example, SET and GET operations).
+
+**   Clean up**
+
+Complete the following steps to clean up your resources:
+
+1. On the AWS CloudFormation console, delete the stack in the primary Region.
+2. If the delete fails, perform a retry delete and choose the Force delete this entire stack option. Validate that the ElastiCache cluster and EC2 instance were deleted in the primary Region.
+3. After the delete is successful in the primary Region, delete the stack in the secondary Region.
+
+Validate that the resources created by the CloudFormation stack were successfully deleted and specifically confirm that the ElastiCache cluster and EC2 instance were deleted in both Regions, because those resources have the highest cost.
+
+**Conclusion**
+In this post, we discussed how to implement multi-Region caching using ElastiCache.
+
+You are welcome to contribute to this GitHub project and suggest improvements or fix any issues. You can create an issue if you find any bugs in the CloudFormation template or want to suggest improvements. If you want to contribute to the project, you can also open a pull request and we will review the suggested code change.
+![image](https://github.com/user-attachments/assets/4320c881-f802-4a0b-812c-ba1cb05629e9)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
