@@ -182,7 +182,7 @@ Validate that the resources created by the CloudFormation stack were successfull
 In this post, we discussed how to implement multi-Region caching using ElastiCache.
 
 You are welcome to contribute to this GitHub project and suggest improvements or fix any issues. You can create an issue if you find any bugs in the CloudFormation template or want to suggest improvements. If you want to contribute to the project, you can also open a pull request and we will review the suggested code change.
-![image](https://github.com/user-attachments/assets/4320c881-f802-4a0b-812c-ba1cb05629e9)
+
 
 
 
